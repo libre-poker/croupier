@@ -81,10 +81,31 @@ export async function activate(api) {
   api.fastify.post(`${prefix}/room/create`, async (request, reply) => {
     cors(reply);
     if (rooms.size >= ROOM_MAX) return reply.code(503).send({ error: 'full' });
+    const b = request.body || {};
     const code = Array.from({ length: 6 }, () =>
       'ABCDEFGHJKMNPQRSTVWXYZ23456789'[Math.floor(Math.random() * 30)]).join('');
-    rooms.set(code, { log: [], channels: new Set(), createdAt: Date.now() });
+    rooms.set(code, {
+      log: [], channels: new Set(), createdAt: Date.now(),
+      name: String(b.name || '').slice(0, 40),
+      game: String(b.game || '').slice(0, 24),
+      unlisted: b.unlisted === true,
+    });
     return { room: code };
+  });
+
+  // the directory: public by default; {unlisted:true} at create opts out
+  api.fastify.get(`${prefix}/room/list`, async (request, reply) => {
+    cors(reply);
+    const now = Date.now();
+    const list = [...rooms.entries()]
+      .filter(([, r]) => !r.unlisted && now - r.createdAt < ROOM_TTL)
+      .sort((a, b) => b[1].createdAt - a[1].createdAt)
+      .slice(0, 100)
+      .map(([code, r]) => ({
+        room: code, name: r.name, game: r.game,
+        createdAt: r.createdAt, listeners: r.channels.size, msgs: r.log.length,
+      }));
+    return { rooms: list };
   });
 
   api.fastify.post(`${prefix}/room/send`, async (request, reply) => {
