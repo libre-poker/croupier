@@ -123,6 +123,17 @@ try {
   const opened = await ch2.next((e) => e.ev === 'open');
   const perm = verifyOpen(S2.root, opened.seed, 8);
   ok(Array.isArray(perm) && new Set(perm).size === 8, 'open: seed reproduces root; permutation is complete');
+  // ---- claims mode: nobody gets tokens up front; redeems are one-time
+  const S3 = await post('/create', { n: 8, parties: [A, B], claims: true });
+  ok(S3.tokens === undefined && S3.claims && S3.claims[A] && S3.claims[B], 'claims mode: no tokens in create response');
+  const cA = await post('/claim', { sid: S3.sid, party: A, code: S3.claims[A] });
+  ok(!!cA.token, 'A redeems own claim for a token');
+  const cAgain = await post('/claim', { sid: S3.sid, party: A, code: S3.claims[A] });
+  ok(cAgain.error === 'already-claimed', 'claims are one-time');
+  const cBad = await post('/claim', { sid: S3.sid, party: B, code: 'nope' });
+  ok(cBad.error === 'bad-claim', 'wrong code refused');
+  r = await post('/consent', { sid: S3.sid, op: { kind: 'reveal', index: 0, to: 'all' } }, cA.token);
+  ok(Array.isArray(r.pending) && r.pending[0] === B, 'claimed token works for consent');
 } finally {
   srv.kill();
 }

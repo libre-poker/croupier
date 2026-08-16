@@ -45,6 +45,11 @@ const server = createServer(async (req, res) => {
       const out = C.create(await readBody(req));
       return json(res, out.error ? 400 : 200, out);
     }
+    if (req.method === 'POST' && url.pathname === '/croupier/claim') {
+      const b = await readBody(req);
+      const out = C.claim(b.sid, b.party, b.code);
+      return json(res, out.error ? (out.error === 'unknown-sid' ? 404 : 403) : 200, out);
+    }
     if (req.method === 'POST' && url.pathname === '/croupier/consent') {
       const b = await readBody(req);
       const party = C.partyFromToken(b.sid, tokenOf(req, url));

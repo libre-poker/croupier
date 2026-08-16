@@ -56,6 +56,71 @@ export async function activate(api) {
     return reply.code(out.error ? 400 : 200).send(out);
   });
 
+  api.fastify.post(`${prefix}/claim`, async (request, reply) => {
+    cors(reply);
+    const b = request.body || {};
+    const out = C.claim(b.sid, b.party, b.code);
+    return reply.code(out.error ? (out.error === 'unknown-sid' ? 404 : 403) : 200).send(out);
+  });
+
+  // ------------------------------------------------------------ rooms
+  // A generic, game-blind message relay: join by code, post, listen.
+  // No auth, no inspection, capped and expiring — the "fully generic"
+  // half of the two-player architecture. The croupier's consent rules
+  // carry the security; the room only carries the chatter.
+  const rooms = new Map();       // code -> {log:[], channels:Set<fn>, createdAt}
+  const ROOM_TTL = 24 * 3600 * 1000, ROOM_MAX = 2000, ROOM_LOG_MAX = 500, MSG_MAX = 8192;
+  setInterval(() => {
+    const now = Date.now();
+    for (const [code, r] of rooms) if (now - r.createdAt > ROOM_TTL) {
+      for (const fn of r.channels) fn(null);
+      rooms.delete(code);
+    }
+  }, 60000).unref?.();
+
+  api.fastify.post(`${prefix}/room/create`, async (request, reply) => {
+    cors(reply);
+    if (rooms.size >= ROOM_MAX) return reply.code(503).send({ error: 'full' });
+    const code = Array.from({ length: 6 }, () =>
+      'ABCDEFGHJKMNPQRSTVWXYZ23456789'[Math.floor(Math.random() * 30)]).join('');
+    rooms.set(code, { log: [], channels: new Set(), createdAt: Date.now() });
+    return { room: code };
+  });
+
+  api.fastify.post(`${prefix}/room/send`, async (request, reply) => {
+    cors(reply);
+    const b = request.body || {};
+    const r = rooms.get(String(b.room || '').toUpperCase());
+    if (!r) return reply.code(404).send({ error: 'unknown-room' });
+    const msg = b.msg;
+    if (msg == null || JSON.stringify(msg).length > MSG_MAX) return reply.code(400).send({ error: 'bad-msg' });
+    const entry = { t: Date.now(), msg };
+    r.log.push(entry);
+    if (r.log.length > ROOM_LOG_MAX) r.log.shift();
+    for (const fn of r.channels) fn(entry);
+    return { ok: true };
+  });
+
+  api.fastify.get(`${prefix}/room/events`, async (request, reply) => {
+    const r = rooms.get(String(request.query?.room || '').toUpperCase());
+    const raw = reply.raw;
+    reply.hijack();
+    if (!r) {
+      raw.writeHead(404, { 'content-type': 'application/json', ...CORS });
+      return raw.end(JSON.stringify({ error: 'unknown-room' }));
+    }
+    raw.writeHead(200, {
+      'content-type': 'text/event-stream', 'cache-control': 'no-cache',
+      connection: 'keep-alive', ...CORS,
+    });
+    raw.write(': room\n\n');
+    for (const e of r.log) raw.write(`data: ${JSON.stringify(e)}\n\n`);
+    const fn = (e) => { if (e === null) return raw.end(); raw.write(`data: ${JSON.stringify(e)}\n\n`); };
+    r.channels.add(fn);
+    const ping = setInterval(() => { try { raw.write(': ping\n\n'); } catch { /* gone */ } }, 25000);
+    request.raw.on('close', () => { clearInterval(ping); r.channels.delete(fn); });
+  });
+
   api.fastify.post(`${prefix}/consent`, async (request, reply) => {
     cors(reply);
     const b = request.body || {};

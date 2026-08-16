@@ -87,6 +87,7 @@ export function createCroupier({
       if (parties.length < 2 || parties.length > maxParties || parties.length > n
         || new Set(parties).size !== parties.length) return { error: 'bad-parties' };
       openPolicy = ['none', 'unanimous', 'any'].includes(openPolicy) ? openPolicy : 'none';
+      const useClaims = arguments[0].claims === true;
       const seed = hex(32);
       const perm = permFromSeed(seed, n);
       const salts = Array.from({ length: n }, (_, i) => saltFor(seed, i));
@@ -97,15 +98,33 @@ export function createCroupier({
         n, parties, openPolicy, meta: meta ?? null,
         seed, perm, salts, levels, root,
         tokens: Object.fromEntries(parties.map((p) => [p, hex(16)])),
+        claims: useClaims ? Object.fromEntries(parties.map((p) => [p, { code: hex(12), claimed: false }])) : null,
         envelopes: Array.from({ length: n }, () => ({ status: 'sealed' })),
         pending: new Map(), log: [], channels: new Map(), opened: false,
       };
       sessions.set(S.sid, S);
-      return {
+      const out = {
         sid: S.sid, root: S.root, algo: 'lp-croupier-v0', n: S.n,
         parties: S.parties, openPolicy: S.openPolicy, createdAt: S.createdAt,
-        meta: S.meta, tokens: S.tokens,
+        meta: S.meta,
       };
+      // claims mode: nobody (not even the creator) receives tokens; each
+      // party redeems its one-time claim code for its own token. A stolen
+      // claim fails visibly at the honest party's redeem — casual-grade
+      // protection, honestly stated (SPEC §6; production uses getAgent).
+      if (useClaims) out.claims = Object.fromEntries(parties.map((p) => [p, S.claims[p].code]));
+      else out.tokens = S.tokens;
+      return out;
+    },
+
+    claim(sid, party, code) {
+      const S = sessions.get(sid);
+      if (!S || Date.now() > S.expiresAt) return { error: 'unknown-sid' };
+      const c = S.claims?.[party];
+      if (!c || c.code !== code) return { error: 'bad-claim' };
+      if (c.claimed) return { error: 'already-claimed' };
+      c.claimed = true;
+      return { sid, party, token: S.tokens[party] };
     },
 
     // party: an already-authenticated party id (binding's job to establish)
