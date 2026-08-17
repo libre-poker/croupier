@@ -115,7 +115,11 @@ export async function activate(api) {
     if (!r) return reply.code(404).send({ error: 'unknown-room' });
     const msg = b.msg;
     if (msg == null || JSON.stringify(msg).length > MSG_MAX) return reply.code(400).send({ error: 'bad-msg' });
-    const entry = { t: Date.now(), msg };
+    if (r.nextId === undefined) {
+      r.log.forEach((e, i) => { if (e.id === undefined) e.id = i; });
+      r.nextId = r.log.length ? r.log[r.log.length - 1].id + 1 : 0;
+    }
+    const entry = { id: r.nextId++, t: Date.now(), msg };
     r.log.push(entry);
     if (r.log.length > ROOM_LOG_MAX) r.log.shift();
     for (const fn of r.channels) fn(entry);
@@ -134,9 +138,12 @@ export async function activate(api) {
       'content-type': 'text/event-stream', 'cache-control': 'no-cache',
       connection: 'keep-alive', ...CORS,
     });
-    raw.write(': room\n\n');
-    for (const e of r.log) raw.write(`data: ${JSON.stringify(e)}\n\n`);
-    const fn = (e) => { if (e === null) return raw.end(); raw.write(`data: ${JSON.stringify(e)}\n\n`); };
+    raw.write('retry: 1500\n\n');
+    // Last-Event-ID: the browser's own resume cursor — replay only the tail
+    const since = Number(request.headers['last-event-id'] ?? -1);
+    const frame = (e) => `${e.id !== undefined ? 'id: ' + e.id + '\n' : ''}data: ${JSON.stringify(e)}\n\n`;
+    for (const e of r.log) { if (!(e.id !== undefined && e.id <= since)) raw.write(frame(e)); }
+    const fn = (e) => { if (e === null) return raw.end(); raw.write(frame(e)); };
     r.channels.add(fn);
     const ping = setInterval(() => { try { raw.write(': ping\n\n'); } catch { /* gone */ } }, 25000);
     request.raw.on('close', () => { clearInterval(ping); r.channels.delete(fn); });
