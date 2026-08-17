@@ -78,6 +78,18 @@ export async function activate(api) {
     }
   }, 60000).unref?.();
 
+  // a room named by a well-formed code exists whenever someone uses it —
+  // server restarts lose the log, never the address
+  const resurrect = (codeRaw) => {
+    const code = String(codeRaw || '').toUpperCase();
+    let r = rooms.get(code);
+    if (!r && /^[A-Z0-9]{6}$/.test(code) && rooms.size < ROOM_MAX) {
+      r = { log: [], channels: new Set(), createdAt: Date.now(), name: 'table', game: '', unlisted: false, nextId: 0 };
+      rooms.set(code, r);
+    }
+    return r;
+  };
+
   api.fastify.post(`${prefix}/room/create`, async (request, reply) => {
     cors(reply);
     if (rooms.size >= ROOM_MAX) return reply.code(503).send({ error: 'full' });
@@ -111,7 +123,7 @@ export async function activate(api) {
   api.fastify.post(`${prefix}/room/send`, async (request, reply) => {
     cors(reply);
     const b = request.body || {};
-    const r = rooms.get(String(b.room || '').toUpperCase());
+    const r = resurrect(b.room);
     if (!r) return reply.code(404).send({ error: 'unknown-room' });
     const msg = b.msg;
     if (msg == null || JSON.stringify(msg).length > MSG_MAX) return reply.code(400).send({ error: 'bad-msg' });
@@ -127,7 +139,7 @@ export async function activate(api) {
   });
 
   api.fastify.get(`${prefix}/room/events`, async (request, reply) => {
-    const r = rooms.get(String(request.query?.room || '').toUpperCase());
+    const r = resurrect(request.query?.room);
     const raw = reply.raw;
     reply.hijack();
     if (!r) {
