@@ -84,7 +84,9 @@ export async function activate(api) {
     const code = String(codeRaw || '').toUpperCase();
     let r = rooms.get(code);
     if (!r && /^[A-Z0-9]{6}$/.test(code) && rooms.size < ROOM_MAX) {
-      r = { log: [], channels: new Set(), createdAt: Date.now(), name: 'table', game: '', unlisted: false, nextId: 0 };
+      // ids seed from the clock so no incarnation ever reuses one — the
+      // listeners' replay-dedup sets survive resurrection
+      r = { log: [], channels: new Set(), createdAt: Date.now(), name: 'table', game: '', unlisted: false, nextId: Date.now() };
       rooms.set(code, r);
     }
     return r;
@@ -97,7 +99,7 @@ export async function activate(api) {
     const code = Array.from({ length: 6 }, () =>
       'ABCDEFGHJKMNPQRSTVWXYZ23456789'[Math.floor(Math.random() * 30)]).join('');
     rooms.set(code, {
-      log: [], channels: new Set(), createdAt: Date.now(),
+      log: [], channels: new Set(), createdAt: Date.now(), nextId: Date.now(),
       name: String(b.name || '').slice(0, 40),
       game: String(b.game || '').slice(0, 24),
       unlisted: b.unlisted === true,
@@ -128,8 +130,9 @@ export async function activate(api) {
     const msg = b.msg;
     if (msg == null || JSON.stringify(msg).length > MSG_MAX) return reply.code(400).send({ error: 'bad-msg' });
     if (r.nextId === undefined) {
-      r.log.forEach((e, i) => { if (e.id === undefined) e.id = i; });
-      r.nextId = r.log.length ? r.log[r.log.length - 1].id + 1 : 0;
+      const base = Date.now();
+      r.log.forEach((e, i) => { if (e.id === undefined) e.id = base + i; });
+      r.nextId = r.log.length ? r.log[r.log.length - 1].id + 1 : base;
     }
     const entry = { id: r.nextId++, t: Date.now(), msg };
     r.log.push(entry);
