@@ -179,6 +179,57 @@ export async function activate(api) {
     return reply.code(out.error ? 404 : 200).send(out);
   });
 
+  // ---- the archive: finished hands live forever, queryable ----------
+  // Mongo is the index; the signed document is the truth. The plugin is
+  // a mailbox, not a judge: verification stays client-side, always.
+  let archiveCol = null;
+  async function archive() {
+    if (archiveCol) return archiveCol;
+    const { MongoClient } = await import('mongodb');
+    const client = new MongoClient(process.env.LP_MONGO || 'mongodb://127.0.0.1:27017');
+    await client.connect();
+    archiveCol = client.db('librepoker').collection('hands');
+    await archiveCol.createIndex({ key: 1, submitter: 1 }, { unique: true });
+    await archiveCol.createIndex({ t: -1 });
+    return archiveCol;
+  }
+
+  api.fastify.post(`${prefix}/archive`, async (request, reply) => {
+    cors(reply);
+    const b = request.body || {};
+    const doc = b.doc;
+    const key = doc && (doc.root || doc.seed);
+    if (!key || typeof key !== 'string' || JSON.stringify(doc).length > 32768) {
+      return reply.code(400).send({ error: 'bad-doc' });
+    }
+    const submitter = String(b.submitter || 'anon').slice(0, 64);
+    try {
+      const col = await archive();
+      await col.updateOne(
+        { key, submitter },
+        { $setOnInsert: { key, submitter, t: Date.now(), doc, attest: b.attest ?? null } },
+        { upsert: true },
+      );
+      return { ok: true };
+    } catch (e) {
+      return reply.code(503).send({ error: 'archive-unavailable' });
+    }
+  });
+
+  api.fastify.get(`${prefix}/archive`, async (request, reply) => {
+    cors(reply);
+    try {
+      const col = await archive();
+      const q = {};
+      if (request.query?.submitter) q.submitter = String(request.query.submitter);
+      const limit = Math.min(200, Math.max(1, Number(request.query?.limit || 50)));
+      const rows = await col.find(q).sort({ t: -1 }).limit(limit).toArray();
+      return { hands: rows.map(({ _id, ...r }) => r) };
+    } catch (e) {
+      return reply.code(503).send({ error: 'archive-unavailable' });
+    }
+  });
+
   api.fastify.get(`${prefix}/health`, async (request, reply) => {
     cors(reply);
     return C.health();
