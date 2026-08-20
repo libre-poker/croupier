@@ -202,7 +202,7 @@ export async function activate(api) {
     if (!key || typeof key !== 'string' || JSON.stringify(doc).length > 32768) {
       return reply.code(400).send({ error: 'bad-doc' });
     }
-    const submitter = String(b.submitter || 'anon').slice(0, 64);
+    const submitter = String(b.submitter || 'anon').slice(0, 128);   // DIDs are 74 chars — 64 chopped them
     try {
       const col = await archive();
       await col.updateOne(
