@@ -205,11 +205,13 @@ export async function activate(api) {
     const submitter = String(b.submitter || 'anon').slice(0, 128);   // DIDs are 74 chars — 64 chopped them
     try {
       const col = await archive();
-      await col.updateOne(
-        { key, submitter },
-        { $setOnInsert: { key, submitter, t: Date.now(), doc, attest: b.attest ?? null } },
-        { upsert: true },
-      );
+      // history is immutable; presence is not. A Table announcement is a
+      // heartbeat — the submitter may refresh their own — while every other
+      // document type stays write-once forever.
+      const update = doc.type === 'Table'
+        ? { $set: { t: Date.now(), doc, attest: b.attest ?? null }, $setOnInsert: { key, submitter } }
+        : { $setOnInsert: { key, submitter, t: Date.now(), doc, attest: b.attest ?? null } };
+      await col.updateOne({ key, submitter }, update, { upsert: true });
       return { ok: true };
     } catch (e) {
       return reply.code(503).send({ error: 'archive-unavailable' });
@@ -222,6 +224,7 @@ export async function activate(api) {
       const col = await archive();
       const q = {};
       if (request.query?.submitter) q.submitter = String(request.query.submitter);
+      if (request.query?.type) q['doc.type'] = String(request.query.type).slice(0, 32);
       const limit = Math.min(200, Math.max(1, Number(request.query?.limit || 50)));
       const rows = await col.find(q).sort({ t: -1 }).limit(limit).toArray();
       return { hands: rows.map(({ _id, ...r }) => r) };
